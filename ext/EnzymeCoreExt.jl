@@ -25,6 +25,9 @@ end
 function EnzymeCore.EnzymeRules.inactive_noinl(::typeof(CUDA.is_pinned), args...)
     return nothing
 end
+function EnzymeCore.EnzymeRules.inactive_noinl(::typeof(CUDA.device_synchronize), args...)
+    return nothing
+end
 function EnzymeCore.EnzymeRules.inactive(::typeof(CUDA.launch_configuration), args...; kwargs...)
     return nothing
 end
@@ -552,6 +555,59 @@ function EnzymeCore.EnzymeRules.reverse(config, ofn::Const{Type{CT}}, ::Type{RT}
 end
 
 function EnzymeCore.EnzymeRules.noalias(::Type{CT}, ::UndefInitializer, args...) where {CT <: CuArray}
+    return nothing
+end
+
+@inline function EnzymeCore.make_zero(
+    x::DenseCuArray{FT},
+) where {FT<:AbstractFloat}
+    return Base.zero(x)
+end
+@inline function EnzymeCore.make_zero(
+    x::DenseCuArray{Complex{FT}},
+) where {FT<:AbstractFloat}
+    return Base.zero(x)
+end
+
+@inline function EnzymeCore.make_zero(
+    ::Type{CT},
+    seen::IdDict,
+    prev::CT,
+    ::Val{copy_if_inactive} = Val(false),
+)::CT where {copy_if_inactive, FT<:AbstractFloat, CT <: Union{DenseCuArray{FT},DenseCuArray{Complex{FT}}}}
+    if haskey(seen, prev)
+        return seen[prev]
+    end
+    newa = Base.zero(prev)
+    seen[prev] = newa
+    return newa
+end
+
+@inline function EnzymeCore.make_zero!(
+    prev::DenseCuArray{FT},
+    seen::ST,
+)::Nothing where {FT<:AbstractFloat,ST}
+    if !isnothing(seen)
+        if prev in seen
+            return nothing
+        end
+        push!(seen, prev)
+    end
+    fill!(prev, zero(FT))
+    return nothing
+end
+
+@inline function EnzymeCore.make_zero!(
+    prev::DenseCuArray{Complex{FT}},
+    seen::ST,
+)::Nothing where {FT<:AbstractFloat,ST}
+    if !isnothing(seen)
+        if prev in seen
+            return nothing
+        end
+        push!(seen, prev)
+    end
+    fill!(prev, zero(Complex{FT}))
     return nothing
 end
 
