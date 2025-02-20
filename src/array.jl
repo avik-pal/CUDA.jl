@@ -45,11 +45,11 @@ end
 #    these are stored with a selector at the end (handled by Julia).
 # 3. bitstype unions (`Union{Int, Float32}`, etc)
 #    these are stored contiguously and require a selector array (handled by us)
-function check_eltype(T)
+@inline function check_eltype(name, T)
   if !Base.allocatedinline(T)
     explanation = explain_eltype(T)
     error("""
-      CuArray only supports element types that are allocated inline.
+      $name only supports element types that are allocated inline.
       $explanation""")
   end
 end
@@ -63,7 +63,7 @@ mutable struct CuArray{T,N,M} <: AbstractGPUArray{T,N}
   dims::Dims{N}
 
   function CuArray{T,N,M}(::UndefInitializer, dims::Dims{N}) where {T,N,M}
-    check_eltype(T)
+    check_eltype("CuArray", T)
     maxsize = prod(dims) * sizeof(T)
     bufsize = if Base.isbitsunion(T)
       # type tag array past the data
@@ -82,7 +82,7 @@ mutable struct CuArray{T,N,M} <: AbstractGPUArray{T,N}
 
   function CuArray{T,N}(data::DataRef{Managed{M}}, dims::Dims{N};
                         maxsize::Int=prod(dims) * sizeof(T), offset::Int=0) where {T,N,M}
-    check_eltype(T)
+    check_eltype("CuArray", T)
     obj = new{T,N,M}(data, maxsize, offset, dims)
     finalizer(unsafe_free!, obj)
     return obj
@@ -531,6 +531,10 @@ function Base.unsafe_copyto!(dest::DenseCuArray{T}, doffs,
     # synchronization here, but the exact cases are hard to know and detect (e.g., unpinned
     # memory normally blocks, but not for all sizes, and not on all memory architectures).
     GC.@preserve src dest begin
+      # semantically, it is not safe for this operation to execute asynchronously, because
+      # the Array may be collected before the copy starts executing. However, when using
+      # unpinned memory, CUDA first stages a copy to a pinned buffer that will outlive
+      # the source array, making this operation safe.
       unsafe_copyto!(pointer(dest, doffs), pointer(src, soffs), n; async=true)
       if Base.isbitsunion(T)
         unsafe_copyto!(typetagdata(dest, doffs), typetagdata(src, soffs), n; async=true)
@@ -543,20 +547,18 @@ end
 function Base.unsafe_copyto!(dest::Array{T}, doffs,
                              src::DenseCuArray{T}, soffs, n) where T
   context!(context(src)) do
-    # the copy below may block in `libcuda`; see the note above.
+    # see comment above; this copy may also block in `libcuda` when dealing with e.g.
+    # unpinned memory, but even more likely because we need to wait for the GPU to finish
+    # so that the expected data is available. because of that, eagerly perform a nonblocking
+    # synchronization first as to maximize the time spent executing Julia code.
+    synchronize(src)
+
     GC.@preserve src dest begin
-      # semantically, it is not safe for this operation to execute asynchronously, because
-      # the Array may be collected before the copy starts executing. However, when using
-      # unpinned memory, CUDA first stages a copy to a pinned buffer that will outlive
-      # the source array, making this operation safe.
-      unsafe_copyto!(pointer(dest, doffs), pointer(src, soffs), n; async=true)
+      unsafe_copyto!(pointer(dest, doffs), pointer(src, soffs), n; async=false)
       if Base.isbitsunion(T)
-        unsafe_copyto!(typetagdata(dest, doffs), typetagdata(src, soffs), n; async=true)
+        unsafe_copyto!(typetagdata(dest, doffs), typetagdata(src, soffs), n; async=false)
       end
     end
-
-    # users expect values to be available after this call
-    synchronize(src)
   end
   return dest
 end
@@ -780,7 +782,7 @@ function Base.fill!(A::DenseCuArray{T}, x) where T <: MemsetCompatTypes
   U = memsettype(T)
   y = reinterpret(U, convert(T, x))
   context!(context(A)) do
-    memset(convert(CuPtr{U}, pointer(A)), y, length(A))
+    GC.@preserve A memset(convert(CuPtr{U}, pointer(A)), y, length(A))
   end
   A
 end
@@ -823,6 +825,8 @@ the first `n` elements will be retained. If `n` is larger, the new elements are 
 guaranteed to be initialized.
 """
 function Base.resize!(A::CuVector{T}, n::Integer) where T
+  n == length(A) && return A
+
   # TODO: add additional space to allow for quicker resizing
   maxsize = n * sizeof(T)
   bufsize = if isbitstype(T)
@@ -839,8 +843,7 @@ function Base.resize!(A::CuVector{T}, n::Integer) where T
     ptr = convert(CuPtr{T}, mem)
     m = min(length(A), n)
     if m > 0
-      synchronize(A)
-      unsafe_copyto!(ptr, pointer(A), m)
+      GC.@preserve A unsafe_copyto!(ptr, pointer(A), m)
     end
     DataRef(pool_free, mem)
   end

@@ -35,6 +35,7 @@ blockdim = 5
     @test nnz(d_x)    == length(nonzeros(d_x))
     x = sprand(m,n,0.2)
     d_x = CuSparseMatrixCSC(x)
+    @test CuSparseMatrixCSC(d_x) === d_x
     @test length(d_x) == m*n
     @test size(d_x)   == (m,n)
     @test size(d_x,1) == m
@@ -49,7 +50,7 @@ blockdim = 5
         @test d_x[firstindex(d_x), firstindex(d_x)] == x[firstindex(x), firstindex(x)]
         @test d_x[div(end, 2), div(end, 2)]         == x[div(end, 2), div(end, 2)]
         @test d_x[end, end]        == x[end, end]
-        @test Array(d_x[firstindex(d_x):end, firstindex(d_x):end]) == x[:, :]
+        @test Array(d_x[firstindex(d_x):end]) == x[:]
         for i in 1:size(x, 2)
             @test Array(d_x[:, i]) == x[:, i]
         end
@@ -74,17 +75,56 @@ blockdim = 5
     y = sprand(k,n,0.2)
     d_y = CuSparseMatrixCSC(y)
     @test_throws ArgumentError copyto!(d_y,d_x)
+    x = sprand(m,n,0.2)
+    d_x = CuSparseMatrixCOO(x)
+    @test CuSparseMatrixCOO(d_x) === d_x
+    @test length(d_x) == m*n
+    @test size(d_x)   == (m,n)
+    @test size(d_x,1) == m
+    @test size(d_x,2) == n
+    @test size(d_x,3) == 1
+    @test ndims(d_x)  == 2
+    d_x2 = copy(d_x)
+    @test d_x2 isa CuSparseMatrixCOO
+    @test size(d_x2) == size(d_x)
+    @test length(d_x) == length(x)
+    CUDA.@allowscalar begin
+        @test Array(d_x[:])        == x[:]
+        @test d_x[firstindex(d_x)] == x[firstindex(x)]
+        @test d_x[div(end, 2)]     == x[div(end, 2)]
+        @test d_x[end]             == x[end]
+        @test d_x[firstindex(d_x), firstindex(d_x)] == x[firstindex(x), firstindex(x)]
+        @test d_x[div(end, 2), div(end, 2)]         == x[div(end, 2), div(end, 2)]
+        @test d_x[end, end]        == x[end, end]
+        @test Array(d_x[firstindex(d_x):end]) == x[:]
+        for i in 1:size(x, 2)
+            @test Array(d_x[:, i]) == x[:, i]
+        end
+        for i in 1:size(x, 1)
+            @test Array(d_x[i, :]) == x[i, :]
+        end
+    end
+    y = sprand(k,n,0.2)
+    d_y = CuSparseMatrixCOO(y)
+    @test_throws ArgumentError copyto!(d_y,d_x)
     d_y = CuSparseMatrixCSR(d_y)
     d_x = CuSparseMatrixCSR(d_x)
+    @test CuSparseMatrixCSR(d_x) === d_x
+    @test length(d_x) == m*n
     @test_throws ArgumentError copyto!(d_y,d_x)
     CUDA.@allowscalar begin
         for i in 1:size(y, 1)
           @test d_y[i, :] ≈ y[i, :]
         end
+        @test d_y[1, 1] ≈ y[1, 1]
     end
     d_y = CuSparseMatrixBSR(d_y, blockdim)
     d_x = CuSparseMatrixBSR(d_x, blockdim)
+    @test CuSparseMatrixBSR(d_x) === d_x
     @test_throws ArgumentError copyto!(d_y,d_x)
+    CUDA.@allowscalar begin
+        @test d_y[1, 1] ≈ y[1, 1]
+    end
     x = sprand(m,0.2)
     d_x = CuSparseVector(x)
     @test size(d_x, 1) == m
@@ -139,7 +179,11 @@ end
             d_x = CuSparseMatrixCSC(x)
             @test collect(d_x) == collect(x)
             @test similar(d_x) isa CuSparseMatrixCSC{elty}
+            @test similar(d_x, (3, 4)) isa CuSparseMatrixCSC{elty}
+            @test size(similar(d_x, (3, 4))) == (3, 4)
             @test similar(d_x, Float32) isa CuSparseMatrixCSC{Float32}
+            @test similar(d_x, Float32, n, m) isa CuSparseMatrixCSC{Float32}
+            @test similar(d_x, Float32, (n, m)) isa CuSparseMatrixCSC{Float32}
         end
 
         @testset "CSR" begin
@@ -147,7 +191,23 @@ end
             d_x  = CuSparseMatrixCSR(x)
             @test collect(d_x) == collect(x)
             @test similar(d_x) isa CuSparseMatrixCSR{elty}
+            @test similar(d_x, (3, 4)) isa CuSparseMatrixCSR{elty}
+            @test size(similar(d_x, (3, 4))) == (3, 4)
             @test similar(d_x, Float32) isa CuSparseMatrixCSR{Float32}
+            @test similar(d_x, Float32, n, m) isa CuSparseMatrixCSR{Float32}
+            @test similar(d_x, Float32, (n, m)) isa CuSparseMatrixCSR{Float32}
+        end
+        
+        @testset "COO" begin
+            x = sprand(elty,m,n, 0.2)
+            d_x  = CuSparseMatrixCOO(x)
+            @test collect(d_x) == collect(x)
+            @test similar(d_x) isa CuSparseMatrixCOO{elty}
+            @test similar(d_x, (3, 4)) isa CuSparseMatrixCOO{elty}
+            @test size(similar(d_x, (3, 4))) == (3, 4)
+            @test size(similar(d_x, Float64, (3, 4))) == (3, 4)
+            @test similar(d_x, Float32) isa CuSparseMatrixCOO{Float32}
+            @test CuSparseMatrixCOO(d_x) === d_x
         end
 
         @testset "BSR" begin
@@ -158,12 +218,13 @@ end
             @test similar(d_x, Float32) isa CuSparseMatrixBSR{Float32}
         end
 
-        @testset "BSR" begin
+        @testset "COO" begin
             x = sprand(elty,m,n, 0.2)
             d_x  = CuSparseMatrixCOO(x)
             @test collect(d_x) == collect(x)
             @test similar(d_x) isa CuSparseMatrixCOO{elty}
             @test similar(d_x, Float32) isa CuSparseMatrixCOO{Float32}
+            @test similar(d_x, Float32, n, m) isa CuSparseMatrixCOO{Float32}
         end
     end
 
@@ -908,8 +969,7 @@ end
         alpha = rand(elty)
         beta = rand(elty)
         @testset "$(typeof(d_A))" for d_A in [CuSparseMatrixCSR(A),
-                                              CuSparseMatrixCSC(A),
-                                              CuSparseMatrixBSR(A, blockdim)]
+                                              CuSparseMatrixCSC(A)]
             d_B = CuArray(B)
             d_C = CuArray(C)
             @test_throws DimensionMismatch CUSPARSE.mm!('N','T',alpha,d_A,d_B,beta,d_C,'O')

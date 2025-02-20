@@ -151,6 +151,8 @@ function Adapt.adapt_storage(::KernelAdaptor, xs::DenseCuArray{T,N}) where {T,N}
     can_prefetch &= !__pinned(convert(Ptr{T}, mem), mem.ctx)
     ## pageable memory needs to be accessible concurrently
     can_prefetch &= attribute(device(), DEVICE_ATTRIBUTE_CONCURRENT_MANAGED_ACCESS) == 1
+    ## don't prefetch on multi device systems.
+    can_prefetch &= ndevices() == 1
 
     if can_prefetch
         # TODO: `view` on buffers?
@@ -166,12 +168,12 @@ end
 # Note that it isn't safe to use unified or heterogeneous memory to support a
 # mutable Ref, because there's no guarantee that the memory would be kept alive
 # long enough (especially with broadcast using ephemeral Refs for scalar args).
-struct CuRefValue{T} <: Ref{T}
+struct KernelRefValue{T} <: Ref{T}
     val::T
 end
-Base.getindex(r::CuRefValue{T}) where T = r.val
+Base.getindex(r::KernelRefValue{T}) where T = r.val
 Adapt.adapt_structure(to::KernelAdaptor, ref::Base.RefValue) =
-    CuRefValue(adapt(to, ref[]))
+    KernelRefValue(adapt(to, ref[]))
 
 # broadcast sometimes passes a ref(type), resulting in a GPU-incompatible DataType box.
 # avoid that by using a special kind of ref that knows about the boxed type.
@@ -258,15 +260,6 @@ end
     to_pass = map(!predicate, sig.parameters)
     call_t =                  Type[x[1] for x in zip(sig.parameters,  to_pass) if x[2]]
     call_args = Union{Expr,Symbol}[x[1] for x in zip(argexprs,        to_pass) if x[2]]
-
-    # replace non-isbits arguments (they should be unused, or compilation would have failed)
-    # alternatively, make it possible to `launch` with non-isbits arguments.
-    for (i,dt) in enumerate(call_t)
-        if !isbitstype(dt)
-            call_t[i] = Ptr{Any}
-            call_args[i] = :C_NULL
-        end
-    end
 
     # add the kernel state, passing an instance with a unique seed
     pushfirst!(call_t, KernelState)
