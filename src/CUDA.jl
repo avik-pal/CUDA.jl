@@ -4,6 +4,8 @@ using GPUCompiler
 
 using GPUArrays
 
+using GPUToolbox: SimpleVersion, @sv_str
+
 using LLVM
 using LLVM.Interop
 using Core: LLVMPtr
@@ -72,6 +74,7 @@ include("device/quirks.jl")
 # array essentials
 include("memory.jl")
 include("array.jl")
+include("refpointer.jl")
 
 # compiler libraries
 include("../lib/cupti/CUPTI.jl")

@@ -32,6 +32,8 @@ using ..LLVMLoopInfo
 
 using Core: LLVMPtr
 
+using GPUToolbox: @sv_str
+
 const cg_debug = false
 if cg_debug
     cg_assert(x) = @cuassert x
@@ -429,6 +431,7 @@ function shfl(cg::coalesced_group, elem, src_rank)
     else
         CUDA.fns(cg.mask, 0, src_rank) + 1i32
     end
+    @boundscheck lane > 0 || throw(BoundsError(cg, src_rank))
 
     shfl_sync(cg.mask, elem, lane)
 end
@@ -439,6 +442,7 @@ function shfl_down(cg::coalesced_group, elem, delta)
     end
 
     lane = CUDA.fns(cg.mask, laneid() - 1i32, delta + 1i32) + 1i32
+    @boundscheck lane > 0 || throw(BoundsError(cg, laneid()+delta))
     if lane > 32
         lane = laneid()
     end
@@ -452,6 +456,7 @@ function shfl_up(cg::coalesced_group, elem, delta)
     end
 
     lane = CUDA.fns(cg.mask, laneid() - 1i32, -(delta + 1i32)) + 1i32
+    @boundscheck lane > 0 || throw(BoundsError(cg, laneid()-delta))
     if lane > 32
         lane = laneid()
     end
