@@ -20,12 +20,14 @@ blockdim = 5
     @test size(d_x,1) == m
     @test size(d_x,2) == 1
     @test ndims(d_x)  == 1
+    dense_d_x = CuVector(x)
     CUDA.@allowscalar begin
         @test Array(d_x[:])        == x[:]
         @test d_x[firstindex(d_x)] == x[firstindex(x)]
         @test d_x[div(end, 2)]     == x[div(end, 2)]
         @test d_x[end]             == x[end]
         @test Array(d_x[firstindex(d_x):end]) == x[firstindex(x):end]
+        @test Array(dense_d_x[firstindex(d_x):end]) == x[firstindex(x):end]
     end
     @test_throws BoundsError d_x[firstindex(d_x) - 1]
     @test_throws BoundsError d_x[end + 1]
@@ -35,6 +37,7 @@ blockdim = 5
     @test nnz(d_x)    == length(nonzeros(d_x))
     x = sprand(m,n,0.2)
     d_x = CuSparseMatrixCSC(x)
+    @test CuSparseMatrixCSC(d_x) === d_x
     @test length(d_x) == m*n
     @test size(d_x)   == (m,n)
     @test size(d_x,1) == m
@@ -49,7 +52,7 @@ blockdim = 5
         @test d_x[firstindex(d_x), firstindex(d_x)] == x[firstindex(x), firstindex(x)]
         @test d_x[div(end, 2), div(end, 2)]         == x[div(end, 2), div(end, 2)]
         @test d_x[end, end]        == x[end, end]
-        @test Array(d_x[firstindex(d_x):end, firstindex(d_x):end]) == x[:, :]
+        @test Array(d_x[firstindex(d_x):end]) == x[:]
         for i in 1:size(x, 2)
             @test Array(d_x[:, i]) == x[:, i]
         end
@@ -74,17 +77,56 @@ blockdim = 5
     y = sprand(k,n,0.2)
     d_y = CuSparseMatrixCSC(y)
     @test_throws ArgumentError copyto!(d_y,d_x)
+    x = sprand(m,n,0.2)
+    d_x = CuSparseMatrixCOO(x)
+    @test CuSparseMatrixCOO(d_x) === d_x
+    @test length(d_x) == m*n
+    @test size(d_x)   == (m,n)
+    @test size(d_x,1) == m
+    @test size(d_x,2) == n
+    @test size(d_x,3) == 1
+    @test ndims(d_x)  == 2
+    d_x2 = copy(d_x)
+    @test d_x2 isa CuSparseMatrixCOO
+    @test size(d_x2) == size(d_x)
+    @test length(d_x) == length(x)
+    CUDA.@allowscalar begin
+        @test Array(d_x[:])        == x[:]
+        @test d_x[firstindex(d_x)] == x[firstindex(x)]
+        @test d_x[div(end, 2)]     == x[div(end, 2)]
+        @test d_x[end]             == x[end]
+        @test d_x[firstindex(d_x), firstindex(d_x)] == x[firstindex(x), firstindex(x)]
+        @test d_x[div(end, 2), div(end, 2)]         == x[div(end, 2), div(end, 2)]
+        @test d_x[end, end]        == x[end, end]
+        @test Array(d_x[firstindex(d_x):end]) == x[:]
+        for i in 1:size(x, 2)
+            @test Array(d_x[:, i]) == x[:, i]
+        end
+        for i in 1:size(x, 1)
+            @test Array(d_x[i, :]) == x[i, :]
+        end
+    end
+    y = sprand(k,n,0.2)
+    d_y = CuSparseMatrixCOO(y)
+    @test_throws ArgumentError copyto!(d_y,d_x)
     d_y = CuSparseMatrixCSR(d_y)
     d_x = CuSparseMatrixCSR(d_x)
+    @test CuSparseMatrixCSR(d_x) === d_x
+    @test length(d_x) == m*n
     @test_throws ArgumentError copyto!(d_y,d_x)
     CUDA.@allowscalar begin
         for i in 1:size(y, 1)
           @test d_y[i, :] ≈ y[i, :]
         end
+        @test d_y[1, 1] ≈ y[1, 1]
     end
     d_y = CuSparseMatrixBSR(d_y, blockdim)
     d_x = CuSparseMatrixBSR(d_x, blockdim)
+    @test CuSparseMatrixBSR(d_x) === d_x
     @test_throws ArgumentError copyto!(d_y,d_x)
+    CUDA.@allowscalar begin
+        @test d_y[1, 1] ≈ y[1, 1]
+    end
     x = sprand(m,0.2)
     d_x = CuSparseVector(x)
     @test size(d_x, 1) == m
@@ -139,7 +181,11 @@ end
             d_x = CuSparseMatrixCSC(x)
             @test collect(d_x) == collect(x)
             @test similar(d_x) isa CuSparseMatrixCSC{elty}
+            @test similar(d_x, (3, 4)) isa CuSparseMatrixCSC{elty}
+            @test size(similar(d_x, (3, 4))) == (3, 4)
             @test similar(d_x, Float32) isa CuSparseMatrixCSC{Float32}
+            @test similar(d_x, Float32, n, m) isa CuSparseMatrixCSC{Float32}
+            @test similar(d_x, Float32, (n, m)) isa CuSparseMatrixCSC{Float32}
         end
 
         @testset "CSR" begin
@@ -147,7 +193,23 @@ end
             d_x  = CuSparseMatrixCSR(x)
             @test collect(d_x) == collect(x)
             @test similar(d_x) isa CuSparseMatrixCSR{elty}
+            @test similar(d_x, (3, 4)) isa CuSparseMatrixCSR{elty}
+            @test size(similar(d_x, (3, 4))) == (3, 4)
             @test similar(d_x, Float32) isa CuSparseMatrixCSR{Float32}
+            @test similar(d_x, Float32, n, m) isa CuSparseMatrixCSR{Float32}
+            @test similar(d_x, Float32, (n, m)) isa CuSparseMatrixCSR{Float32}
+        end
+        
+        @testset "COO" begin
+            x = sprand(elty,m,n, 0.2)
+            d_x  = CuSparseMatrixCOO(x)
+            @test collect(d_x) == collect(x)
+            @test similar(d_x) isa CuSparseMatrixCOO{elty}
+            @test similar(d_x, (3, 4)) isa CuSparseMatrixCOO{elty}
+            @test size(similar(d_x, (3, 4))) == (3, 4)
+            @test size(similar(d_x, Float64, (3, 4))) == (3, 4)
+            @test similar(d_x, Float32) isa CuSparseMatrixCOO{Float32}
+            @test CuSparseMatrixCOO(d_x) === d_x
         end
 
         @testset "BSR" begin
@@ -158,12 +220,13 @@ end
             @test similar(d_x, Float32) isa CuSparseMatrixBSR{Float32}
         end
 
-        @testset "BSR" begin
+        @testset "COO" begin
             x = sprand(elty,m,n, 0.2)
             d_x  = CuSparseMatrixCOO(x)
             @test collect(d_x) == collect(x)
             @test similar(d_x) isa CuSparseMatrixCOO{elty}
             @test similar(d_x, Float32) isa CuSparseMatrixCOO{Float32}
+            @test similar(d_x, Float32, n, m) isa CuSparseMatrixCOO{Float32}
         end
     end
 
@@ -908,8 +971,7 @@ end
         alpha = rand(elty)
         beta = rand(elty)
         @testset "$(typeof(d_A))" for d_A in [CuSparseMatrixCSR(A),
-                                              CuSparseMatrixCSC(A),
-                                              CuSparseMatrixBSR(A, blockdim)]
+                                              CuSparseMatrixCSC(A)]
             d_B = CuArray(B)
             d_C = CuArray(C)
             @test_throws DimensionMismatch CUSPARSE.mm!('N','T',alpha,d_A,d_B,beta,d_C,'O')
@@ -1127,5 +1189,62 @@ end
         @test Array(coo.rowInd) == [1, 2]
         @test Array(coo.colInd) == [1, 2]
         @test Array(coo.nzVal) == [12f0, 1f0]
+    end
+end
+
+@testset "Utility type conversions" begin
+    @test convert(CUSPARSE.cusparseIndexType_t, Int32) == CUSPARSE.CUSPARSE_INDEX_32I
+    @test convert(CUSPARSE.cusparseIndexType_t, Int64) == CUSPARSE.CUSPARSE_INDEX_64I
+    @test_throws ArgumentError("CUSPARSE type equivalent for index type Int8 does not exist!") convert(CUSPARSE.cusparseIndexType_t, Int8)
+    @test convert(Type, CUSPARSE.CUSPARSE_INDEX_32I) == Int32
+    @test convert(Type, CUSPARSE.CUSPARSE_INDEX_64I) == Int64
+
+    @test convert(CUSPARSE.cusparseIndexBase_t, 0) == CUSPARSE.CUSPARSE_INDEX_BASE_ZERO
+    @test convert(CUSPARSE.cusparseIndexBase_t, 1) == CUSPARSE.CUSPARSE_INDEX_BASE_ONE
+    @test_throws ArgumentError("CUSPARSE does not support index base 2!") convert(CUSPARSE.cusparseIndexBase_t, 2)
+    @test convert(Int8, CUSPARSE.CUSPARSE_INDEX_BASE_ZERO) == zero(Int8)
+    @test convert(Int8, CUSPARSE.CUSPARSE_INDEX_BASE_ONE)  == one(Int8)
+
+    @test_throws ArgumentError("Unknown operation X") convert(CUSPARSE.cusparseOperation_t, CUSPARSE.SparseChar('X'))
+
+    @test convert(CUSPARSE.cusparseMatrixType_t, CUSPARSE.SparseChar('G')) == CUSPARSE.CUSPARSE_MATRIX_TYPE_GENERAL
+    @test convert(CUSPARSE.cusparseMatrixType_t, CUSPARSE.SparseChar('T')) == CUSPARSE.CUSPARSE_MATRIX_TYPE_TRIANGULAR
+    @test convert(CUSPARSE.cusparseMatrixType_t, CUSPARSE.SparseChar('S')) == CUSPARSE.CUSPARSE_MATRIX_TYPE_SYMMETRIC
+    @test convert(CUSPARSE.cusparseMatrixType_t, CUSPARSE.SparseChar('H')) == CUSPARSE.CUSPARSE_MATRIX_TYPE_HERMITIAN
+    @test_throws ArgumentError("Unknown matrix type X") convert(CUSPARSE.cusparseMatrixType_t, CUSPARSE.SparseChar('X'))
+
+    @test_throws ArgumentError("Unknown attribute X") convert(CUSPARSE.cusparseSpMatAttribute_t, CUSPARSE.SparseChar('X'))
+    @test_throws ArgumentError("Unknown fill mode X") convert(CUSPARSE.cusparseFillMode_t, CUSPARSE.SparseChar('X'))
+    @test_throws ArgumentError("Unknown diag type X") convert(CUSPARSE.cusparseDiagType_t, CUSPARSE.SparseChar('X'))
+    @test_throws ArgumentError("Unknown index base X") convert(CUSPARSE.cusparseIndexBase_t, CUSPARSE.SparseChar('X'))
+
+    @test convert(CUSPARSE.cusparseDirection_t, CUSPARSE.SparseChar('R')) == CUSPARSE.CUSPARSE_DIRECTION_ROW
+    @test convert(CUSPARSE.cusparseDirection_t, CUSPARSE.SparseChar('C')) == CUSPARSE.CUSPARSE_DIRECTION_COLUMN
+    @test_throws ArgumentError("Unknown direction X") convert(CUSPARSE.cusparseDirection_t, CUSPARSE.SparseChar('X'))
+
+    @test convert(CUSPARSE.cusparseOrder_t, CUSPARSE.SparseChar('R')) == CUSPARSE.CUSPARSE_ORDER_ROW
+    @test convert(CUSPARSE.cusparseOrder_t, CUSPARSE.SparseChar('C')) == CUSPARSE.CUSPARSE_ORDER_COL
+    @test_throws ArgumentError("Unknown order X") convert(CUSPARSE.cusparseOrder_t, CUSPARSE.SparseChar('X'))
+
+    @test convert(CUSPARSE.cusparseSpSVUpdate_t, CUSPARSE.SparseChar('G')) == CUSPARSE.CUSPARSE_SPSV_UPDATE_GENERAL
+    @test convert(CUSPARSE.cusparseSpSVUpdate_t, CUSPARSE.SparseChar('D')) == CUSPARSE.CUSPARSE_SPSV_UPDATE_DIAGONAL
+    @test_throws ArgumentError("Unknown update X") convert(CUSPARSE.cusparseSpSVUpdate_t, CUSPARSE.SparseChar('X'))
+
+    @test convert(CUSPARSE.cusparseSpSMUpdate_t, CUSPARSE.SparseChar('G')) == CUSPARSE.CUSPARSE_SPSV_UPDATE_GENERAL
+    @test convert(CUSPARSE.cusparseSpSMUpdate_t, CUSPARSE.SparseChar('D')) == CUSPARSE.CUSPARSE_SPSV_UPDATE_DIAGONAL
+    @test_throws ArgumentError("Unknown update X") convert(CUSPARSE.cusparseSpSMUpdate_t, CUSPARSE.SparseChar('X'))
+end
+
+@testset "CuSparseArrayCSR" begin
+    x = sprand(n, m, 0.2)
+    d_x = CuSparseArrayCSR(CuArray(x.colptr), CuArray(x.rowval), CuArray(x.nzval), (m, n))
+    @test d_x isa CuSparseArrayCSR
+    @test length(d_x) == m*n
+    @test CuSparseArrayCSR(d_x) === d_x
+    @test size(similar(d_x)) == size(d_x)
+    @test size(d_x, 3) == 1
+    @test_throws ArgumentError("dimension must be ≥ 1, got 0") size(d_x, 0)
+    CUDA.@allowscalar begin
+        @test d_x[1, 2] == x[2, 1]
     end
 end

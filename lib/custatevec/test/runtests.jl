@@ -8,7 +8,7 @@ using cuStateVec
 @info "cuStateVec version: $(cuStateVec.version())"
 
 @testset "cuStateVec" begin
-    import cuStateVec: CuStateVec, applyMatrix!, applyMatrixBatched!, applyPauliExp!, applyGeneralizedPermutationMatrix!, expectation, expectationsOnPauliBasis, sample, testMatrixType, Pauli, PauliX, PauliY, PauliZ, PauliI, measureOnZBasis!, swapIndexBits!, abs2SumOnZBasis, collapseOnZBasis!, batchMeasure!, abs2SumArray, collapseByBitString!, abs2SumArrayBatched, collapseByBitStringBatched!
+    import cuStateVec: CuStateVec, applyMatrix!, applyMatrixBatched!, applyPauliExp!, applyGeneralizedPermutationMatrix!, expectation, expectationsOnPauliBasis, sample, testMatrixType, Pauli, PauliX, PauliY, PauliZ, PauliI, measureOnZBasis!, swapIndexBits!, abs2SumOnZBasis, collapseOnZBasis!, batchMeasure!, batchMeasureWithOffset!, abs2SumArray, collapseByBitString!, abs2SumArrayBatched, collapseByBitStringBatched!, accessorSet!, accessorGet, CuStateVecAccessor
 
     @testset "applyMatrix! and expectation" begin
         # build a simple state and compute expectations
@@ -43,14 +43,22 @@ using cuStateVec
         n_q = 2
         @testset for elty in [ComplexF32, ComplexF64]
             H = convert(Matrix{elty}, (1/√2).*[1 1; 1 -1])
-            X = convert(Matrix{elty}, [0 1; 1 0])
-            Z = convert(Matrix{elty}, [1 0; 0 -1])
             sv = CuStateVec(elty, n_q)
             sv = applyMatrix!(sv, H, false, Int32[0], Int32[])
             sv = applyMatrix!(sv, H, false, Int32[1], Int32[])
             pauli_ops = [cuStateVec.Pauli[cuStateVec.PauliX()], cuStateVec.Pauli[cuStateVec.PauliX()]]
             exp_vals = expectationsOnPauliBasis(sv, pauli_ops, [[0], [1]])
             @test exp_vals[1] ≈ 1.0 atol=1e-6
+            @test exp_vals[2] ≈ 1.0 atol=1e-6
+
+
+            H = convert(Matrix{elty}, (1/√2).*[1 1; 1 -1])
+            sv = CuStateVec(elty, n_q)
+            sv = applyMatrix!(sv, H, false, Int32[0], Int32[])
+            sv = applyMatrix!(sv, H, false, Int32[1], Int32[])
+            pauli_ops = [cuStateVec.Pauli[cuStateVec.PauliY()], cuStateVec.Pauli[cuStateVec.PauliI()]]
+            exp_vals = expectationsOnPauliBasis(sv, pauli_ops, [[0], [1]])
+            @test exp_vals[1] ≈ 0.0 atol=1e-6
             @test exp_vals[2] ≈ 1.0 atol=1e-6
         end
     end
@@ -247,5 +255,86 @@ using cuStateVec
             @test testMatrixType(CuMatrix{elty}(A), false, cuStateVec.CUSTATEVEC_MATRIX_TYPE_UNITARY) <= 200 * eps(real(elty))
             @test testMatrixType(CuMatrix{elty}(A), true, cuStateVec.CUSTATEVEC_MATRIX_TYPE_UNITARY) <= 200 * eps(real(elty))
         end
+    end
+    @testset "accessorSet!/accessorGet" begin
+        nIndexBits = 3
+        bitOrdering  = [1, 2, 0]
+        @testset for elty in [ComplexF32, ComplexF64]
+            h_sv = zeros(elty, 2^nIndexBits)
+            h_sv_result = elty[0; 0.1im; 0.1+0.1im; 0.1+0.2im; 0.2+0.2im; 0.3+0.3im; 0.3+0.4im; 0.4+0.5im]
+            buffer = elty[0; 0.1im; 0.1+0.1im; 0.1+0.2im; 0.2+0.2im; 0.3+0.3im; 0.3+0.4im; 0.4+0.5im]
+            
+            sv = CuStateVec(h_sv)
+            acc = CuStateVecAccessor(sv, bitOrdering, Int[], Int[])
+            accessorSet!(acc, buffer, 0, 2^nIndexBits)
+            next_buf = similar(buffer)
+            accessorGet(acc, next_buf, 0, 2^nIndexBits)
+            @test next_buf == h_sv_result 
+        end
+    end
+end
+
+@testset "cuStateVec multiGPU" begin
+
+    nGlobalBits  = 2;
+    nLocalBits   = 2;
+    nSubSvs      = 2^nGlobalBits
+    subSvSize    = 2^nLocalBits
+    bitStringLen = 2
+    bitOrdering  = [1, 0]
+
+    bitString = Vector{Int}(undef, bitStringLen)
+    bitString_result = zeros(Int, bitStringLen)
+    # the most random of all numbers
+    randnum = 0.71
+
+    h_sv = Vector{ComplexF64}[]
+    push!(h_sv, [0.0; 0.125im; 0.250im; 0.375im])
+    push!(h_sv, [0.0; -0.125im; -0.250im; -0.375im])
+    push!(h_sv, [0.125; 0.125-0.125im; 0.125-0.250im; 0.125-0.375im])
+    push!(h_sv, [-0.125; -0.125-0.125im; -0.125-0.250im; -0.125-0.375im])
+    
+    h_sv_result = Vector{ComplexF64}[]
+    push!(h_sv_result, zeros(ComplexF64, subSvSize))
+    push!(h_sv_result, zeros(ComplexF64, subSvSize))
+    push!(h_sv_result, ComplexF64[1/√2; 0; 0; 0])
+    push!(h_sv_result, ComplexF64[-1/√2; 0; 0; 0])
+
+    n_devices = 4;
+    # on CI, if we only have a single device, set up multiple devices
+    # so that we properly cover the multigpu code paths.
+    if ndevices() < n_devices
+        sv_devices = fill(device(), n_devices)
+    else
+        sv_devices = collect(devices())[1:n_devices]
+    end
+    initial_dev = device()
+    d_sv = similar(h_sv, CuStateVec{ComplexF64})
+    normArray = similar(d_sv, Float64)
+    try
+        for sv_i in 1:length(d_sv)
+            device!(sv_devices[sv_i])
+            d_sv[sv_i] = CuStateVec(h_sv[sv_i])
+            normArray[sv_i] = abs2SumArray(d_sv[sv_i], Int[], Int[], Int[])[]
+        end
+    finally
+        device!(initial_dev)
+    end
+    cumulativeArray = zeros(Float64, length(normArray) + 1)
+    for sv_i in 1:length(normArray)
+        cumulativeArray[sv_i+1] = cumulativeArray[sv_i] + normArray[sv_i] 
+    end
+    try
+        for sv_i in 1:length(d_sv)
+            if cumulativeArray[sv_i] <= randnum && randnum < cumulativeArray[sv_i + 1]
+                norm = cumulativeArray[end]
+                offset = cumulativeArray[sv_i]
+                device!(sv_devices[sv_i])
+                new_sv, bitstring = batchMeasureWithOffset!(d_sv[sv_i], bitOrdering, randnum, offset, norm)
+                @test length(bitstring) == nLocalBits
+            end
+        end
+    finally
+        device!(initial_dev)
     end
 end

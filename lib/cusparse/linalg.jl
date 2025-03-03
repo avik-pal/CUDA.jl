@@ -7,7 +7,7 @@ function LinearAlgebra.opnorm(A::CuSparseMatrixCSR, p::Real=2)
     elseif p == 1
         return maximum(sum(abs, A; dims=1))
     else
-        error("p=$p is not supported")
+        throw(ArgumentError("p=$p is not supported"))
     end
 end
 
@@ -138,6 +138,7 @@ function LinearAlgebra.dot(y::CuVector{T}, A::CuSparseMatrixCSC{T}, x::CuVector{
     end
     n = size(A, 2)
 
+    ## COV_EXCL_START
     function kernel(y::CuDeviceVector{T1}, colPtr::CuDeviceVector{T2}, rowVal::CuDeviceVector{T2},
         nzVal::CuDeviceVector{T1}, x::CuDeviceVector{T1}, result::CuDeviceVector{T1}, n::Integer, shuffle) where {T1,T2}
 
@@ -163,6 +164,7 @@ function LinearAlgebra.dot(y::CuVector{T}, A::CuSparseMatrixCSC{T}, x::CuVector{
         end
         return
     end
+    ## COV_EXCL_STOP
 
     function compute_threads(max_threads, wanted_threads, shuffle, dev)
         if wanted_threads > max_threads
@@ -191,6 +193,7 @@ function LinearAlgebra.dot(y::CuVector{T}, A::CuSparseMatrixCSR{T}, x::CuVector{
     end
     n = size(A, 1)
 
+    ## COV_EXCL_START
     function kernel(y::CuDeviceVector{T1}, rowPtr::CuDeviceVector{T2}, colVal::CuDeviceVector{T2},
         nzVal::CuDeviceVector{T1}, x::CuDeviceVector{T1}, result::CuDeviceVector{T1}, n::Integer, shuffle) where {T1,T2}
 
@@ -216,6 +219,7 @@ function LinearAlgebra.dot(y::CuVector{T}, A::CuSparseMatrixCSR{T}, x::CuVector{
         end
         return
     end
+    ## COV_EXCL_STOP
 
     function compute_threads(max_threads, wanted_threads, shuffle, dev)
         if wanted_threads > max_threads
@@ -236,6 +240,18 @@ function LinearAlgebra.dot(y::CuVector{T}, A::CuSparseMatrixCSR{T}, x::CuVector{
     kernel(y, A.rowPtr, A.colVal, A.nzVal, x, result, n, Val(shuffle); threads, blocks)
 
     return sum(result)
+end
+
+# work around upstream breakage from JuliaLang/julia#55547
+@static if VERSION >= v"1.11.2"
+    const CuSparseUpperOrUnitUpperTriangular = LinearAlgebra.UpperOrUnitUpperTriangular{
+        <:Any,<:Union{<:AbstractCuSparseMatrix, Adjoint{<:Any, <:AbstractCuSparseMatrix}, Transpose{<:Any, <:AbstractCuSparseMatrix}}}
+    const CuSparseLowerOrUnitLowerTriangular = LinearAlgebra.LowerOrUnitLowerTriangular{
+        <:Any,<:Union{<:AbstractCuSparseMatrix, Adjoint{<:Any, <:AbstractCuSparseMatrix}, Transpose{<:Any, <:AbstractCuSparseMatrix}}}
+    LinearAlgebra.istriu(::CuSparseUpperOrUnitUpperTriangular) = true
+    LinearAlgebra.istril(::CuSparseUpperOrUnitUpperTriangular) = false
+    LinearAlgebra.istriu(::CuSparseLowerOrUnitLowerTriangular) = false
+    LinearAlgebra.istril(::CuSparseLowerOrUnitLowerTriangular) = true
 end
 
 for SparseMatrixType in [:CuSparseMatrixCSC, :CuSparseMatrixCSR]
